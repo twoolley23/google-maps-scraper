@@ -72,3 +72,4 @@ RUN chmod -R 755 /opt/browsers \
 COPY --from=builder /usr/bin/google-maps-scraper /usr/bin/
 
 ENTRYPOINT ["google-maps-scraper"]
+CMD ["-data-folder", "/gmapsdata"]
