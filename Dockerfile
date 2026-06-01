@@ -1,61 +1,74 @@
-FROM python:3.10-slim
+# Build stage for Playwright dependencies
+FROM ubuntu:20.04 AS playwright-deps
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/browsers
+#ENV PLAYWRIGHT_DRIVER_PATH=/opt/
+ARG TARGETARCH
 
-# 1. Install vanilla system headless Chromium, Driver, and base utilities
+RUN export PATH=$PATH:/usr/local/go/bin:/root/go/bin \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl wget \
+    # Architektur-Logik für den Go-Download
+    && if [ "$TARGETARCH" = "arm64" ]; then \
+         GO_ARCH="arm64"; \
+       else \
+         GO_ARCH="amd64"; \
+       fi \
+    && wget -q "https://go.dev/dl/go1.26.3.linux-${GO_ARCH}.tar.gz" \
+    && tar -C /usr/local -xzf "go1.26.3.linux-${GO_ARCH}.tar.gz" \
+    && rm "go1.26.3.linux-${GO_ARCH}.tar.gz" \
+    # ... (Rest des ursprünglichen RUN-Befehls: Nodejs, Playwright, etc.)
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* \
+    && go install github.com/playwright-community/playwright-go/cmd/playwright@latest \
+    && mkdir -p /opt/browsers \
+    && playwright install chromium --with-deps
+
+# Build stage
+FROM golang:1.26.3-trixie AS builder
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -ldflags="-w -s" -o /usr/bin/google-maps-scraper
+
+# Final stage
+FROM debian:trixie-slim
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/browsers
+ENV PLAYWRIGHT_DRIVER_PATH=/opt
+
+# Install only the necessary dependencies in a single layer
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    chromium \
-    chromium-driver \
     ca-certificates \
-    curl \
-    wget \
-    fonts-liberation \
-    libappindicator3-1 \
-    libasound2 \
-    libatk-bridge2.0-0 \
-    libatk1.0-0 \
-    libc6 \
-    libcairo2 \
-    libcups2 \
-    libdbus-1-3 \
-    libexpat1 \
-    libfontconfig1 \
-    libgbm1 \
-    libgcc1 \
-    libgdk-pixbuf2.0-0 \
-    libglib2.0-0 \
-    libgtk-3-0 \
-    libnspr4 \
     libnss3 \
-    libpango-1.0-0 \
-    libpangocairo-1.0-0 \
-    libstdc++6 \
+    libnspr4 \
+    libatk1.0-0 \
+    libatk-bridge2.0-0 \
+    libcups2 \
+    libdrm2 \
+    libdbus-1-3 \
+    libxkbcommon0 \
+    libatspi2.0-0 \
     libx11-6 \
-    libx11-xcb1 \
-    libxcb1 \
     libxcomposite1 \
-    libxcursor1 \
     libxdamage1 \
     libxext6 \
     libxfixes3 \
-    libxi6 \
     libxrandr2 \
-    libxrender1 \
-    libxss1 \
-    libxtst6 \
+    libgbm1 \
+    libpango-1.0-0 \
+    libcairo2 \
+    libasound2 \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# 2. Set runtime environment properties
-ENV PYTHONUNBUFFERED=1
-WORKDIR /app
+COPY --from=playwright-deps /opt/browsers /opt/browsers
+COPY --from=playwright-deps /root/.cache/ms-playwright-go /opt/ms-playwright-go
 
-# 3. Pull code directly from repository context layer
-COPY . /app
+RUN chmod -R 755 /opt/browsers \
+    && chmod -R 755 /opt/ms-playwright-go
 
-# 4. Hard-harden local execute flags for your compiled Go binary
-RUN chmod +x ./google-maps-scraper
+COPY --from=builder /usr/bin/google-maps-scraper /usr/bin/
 
-# 5. Install light Python pipeline dependencies
-RUN pip install --no-cache-dir requests supabase dnspython
-
-# 6. Fire the automated MSA master tracking engine
-CMD ["python", "healthcare_scout.py"]
+ENTRYPOINT ["google-maps-scraper"]
